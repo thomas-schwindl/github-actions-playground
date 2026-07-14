@@ -29,3 +29,9 @@ resource "local_file" "sensitive_data" {
   content         = "Das ist ein simuliertes Passwort!"
   file_permission = "0777"
 }
+
+resource "local_file" "sensitive_data" {
+  filename        = "${path.module}/secret2.txt"
+  content         = "Das ist ein simuliertes Passwort!"
+  file_permission = "0777"
+}
