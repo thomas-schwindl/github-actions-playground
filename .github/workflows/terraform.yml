@@ -1,4 +1,4 @@
-name: "Terraform GitOps Simulation"
+name: "Terraform GitOps Enterprise"
 
 on:
   pull_request:
@@ -8,81 +8,148 @@ on:
     branches:
       - main
 
+# Verhindert, dass mehrere Runs für dieselbe Pipeline parallel laufen und den State zerstören
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  terraform-checks:
-    name: "Lokal Checks & Validierung"
+  # 1. Schnelle, parallele Checks
+  format:
+    name: "Check: Format"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.7
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+  security:
+    name: "Check: Security"
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
       contents: read
-
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Run Tfsec (Security Scan)
+        uses: aquasecurity/tfsec-pr-commenter-action@v1.2.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: 1.5.7
+  # 2. Validierung & Plan-Generierung
+  plan:
+    name: "Terraform: Plan"
+    runs-on: ubuntu-latest
+    needs: [format, security]
+    permissions:
+      pull-requests: write
+      contents: read
+    outputs:
+      plan-exitcode: ${{ steps.plan.outputs.exitcode }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    # --- CHECK 1: FORMATIERUNG (Hält den Code sauber) ---
-    - name: Terraform Format Check
-      run: terraform fmt -check -recursive
-      # Falls jemand unformatierten Code pusht, bricht die Pipeline hier ab.
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.7
 
-    # --- CHECK 2: SECURITY SCAN (Sucht nach Schwachstellen) ---
-    - name: Run Tfsec (Security Scan)
-      uses: aquasecurity/tfsec-pr-commenter-action@v1.2.0
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-      # Findet z.B. unverschlüsselte Buckets oder offene Ports und kommentiert direkt im PR.
+      - name: Terraform Init
+        run: |
+          cd environments/test
+          terraform init
 
-    - name: Terraform Init
-      run: |
-        cd environments/test
-        terraform init -backend=false
-        # '-backend=false' erlaubt das Validieren völlig ohne echtes Backend/S3-Verbindung
+      - name: Terraform Validate
+        run: |
+          cd environments/test
+          terraform validate
 
-    # --- CHECK 3: SYNTAX & LOGIK (Prüft Variablen & Provider) ---
-    - name: Terraform Validate
-      run: |
-        cd environments/test
-        terraform validate
+      # Wir generieren den Plan und speichern ihn binär in einer Datei ab
+      - name: Terraform Plan
+        id: plan
+        run: |
+          cd environments/test
+          terraform plan -detailed-exitcode -no-color -out=tfplan > plan_output.txt
+        continue-on-error: true # Verhindert den Abbruch, damit wir den Kommentar posten können
 
-    # --- SCHRITT 4: PLAN (Läuft nur im PR) ---
-    - name: Terraform Plan
-      if: github.event_name == 'pull_request'
-      id: plan
-      run: |
-        cd environments/test
-        terraform plan -no-color -out=tfplan > plan_output.txt
-      continue-on-error: true
+      # Der Plan-Kommentar im PR
+      - name: Post Plan to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('environments/test/plan_output.txt', 'utf8');
+            const output = `#### Terraform Plan Status: 📝
+            
+            \`\`\`terraform
+            ${plan}
+            \`\`\`
+            
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
 
-    - name: Post Plan to PR
-      if: github.event_name == 'pull_request'
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const fs = require('fs');
-          const plan = fs.readFileSync('environments/test/plan_output.txt', 'utf8');
-          const output = `#### Terraform Plan Status: 📝
-          
-          \`\`\`terraform
-          ${plan}
-          \`\`\`
-          
-          *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
-          
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: output
-          })
+      # Verhindert den PR-Merge, falls der Plan fehlgeschlagen ist
+      - name: Check Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
 
-    # --- SCHRITT 5: APPLY (Läuft nur beim Merge auf main) ---
-    - name: Terraform Apply
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      run: |
-        cd environments/test
-        terraform apply -auto-approve
+      # TOP-NOTCH FEATURE: Wir sichern das Plan-Artefakt für das spätere Apply
+      - name: Upload Plan Artifact
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: environments/test/tfplan
+          retention-days: 2
+
+  # 3. Das absolut sichere Apply
+  apply:
+    name: "Terraform: Apply"
+    runs-on: ubuntu-latest
+    needs: plan
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    # TOP-NOTCH FEATURE: Bindung an ein GitHub Environment mit "Manual Approval"
+    environment:
+      name: production
+      
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.7
+
+      # Wir holen uns exakt den im PR generierten Plan wieder ab!
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: environments/test/
+
+      - name: Terraform Init
+        run: |
+          cd environments/test
+          terraform init
+
+      # Da wir die 'tfplan'-Datei nutzen, wird exakt der Code deployt, den du im PR abgesegnet hast!
+      - name: Terraform Apply
+        run: |
+          cd environments/test
+          terraform apply -auto-approve tfplan
