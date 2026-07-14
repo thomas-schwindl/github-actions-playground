@@ -138,10 +138,15 @@ jobs:
 
       # Wir holen uns exakt den im PR generierten Plan wieder ab!
       - name: Download Plan Artifact
-        uses: actions/download-artifact@v4
+        uses: dawidd6/action-download-artifact@v6
         with:
           name: tfplan
           path: environments/test/
+          # Holt das Artefakt aus dem letzten erfolgreichen Run des PRs, der in main gemergt wurde
+          workflow: terraform.yml
+          run_id: ${{ github.event.workflow_run.id }} # Falls durch Workflow_run getriggert
+          # Fallback: Sucht nach dem letzten erfolgreichen Artefakt dieses Namens im Repo
+          search_artifacts: true
 
       - name: Terraform Init
         run: |
