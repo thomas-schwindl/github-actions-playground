@@ -9,81 +9,118 @@ on:
       - main
 
 jobs:
-  terraform-checks:
-    name: "Lokal Checks & Validierung"
+  # JOB 1: Formatierung prüfen (Schnell & parallel)
+  format:
+    name: "Check: Format"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.7
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+  # JOB 2: Security Scannen (Schnell & parallel)
+  security:
+    name: "Check: Security"
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
       contents: read
-
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: 1.5.7
+      - name: Run Tfsec (Security Scan)
+        uses: aquasecurity/tfsec-pr-commenter-action@v1.2.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
-    # --- CHECK 1: FORMATIERUNG (Hält den Code sauber) ---
-    - name: Terraform Format Check
-      run: terraform fmt -check -recursive
-      # Falls jemand unformatierten Code pusht, bricht die Pipeline hier ab.
+  # JOB 3: Validierung (Wartet auf Format & Security)
+  validate:
+    name: "Check: Validate"
+    runs-on: ubuntu-latest
+    needs: [format, security] # Startet erst, wenn Format & Security grün sind!
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    # --- CHECK 2: SECURITY SCAN (Sucht nach Schwachstellen) ---
-    - name: Run Tfsec (Security Scan)
-      uses: aquasecurity/tfsec-pr-commenter-action@v1.2.0
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-      # Findet z.B. unverschlüsselte Buckets oder offene Ports und kommentiert direkt im PR.
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.7
 
-# --- 4. INITIALISIEREN & VALIDIEREN ---
-    # Wir machen jetzt direkt ein volles Init, damit sowohl Validate als auch Plan funktionieren.
-    - name: Terraform Init
-      run: |
-        cd environments/test
-        terraform init
+      - name: Terraform Init
+        run: |
+          cd environments/test
+          terraform init
 
-    - name: Terraform Validate
-      run: |
-        cd environments/test
-        terraform validate
+      - name: Terraform Validate
+        run: |
+          cd environments/test
+          terraform validate
 
-    # --- 5. SCHRITT: PLAN (Läuft nur im PR) ---
-    - name: Terraform Plan
-      if: github.event_name == 'pull_request'
-      id: plan
-      run: |
-        cd environments/test
-        # tfplan wird generiert, damit wir eine sichere Ausführungsbasis haben
-        terraform plan -no-color -out=tfplan > plan_output.txt
-      continue-on-error: true
+  # JOB 4: Plan oder Apply ausführen (Wartet auf erfolgreiche Validierung)
+  deploy:
+    name: "Terraform: Run"
+    runs-on: ubuntu-latest
+    needs: validate # Startet erst, wenn die Validierung erfolgreich war!
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: Post Plan to PR
-      if: github.event_name == 'pull_request'
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const fs = require('fs');
-          const plan = fs.readFileSync('environments/test/plan_output.txt', 'utf8');
-          const output = `#### Terraform Plan Status: 📝
-          
-          \`\`\`terraform
-          ${plan}
-          \`\`\`
-          
-          *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
-          
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: output
-          })
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.7
 
-    # --- SCHRITT 5: APPLY (Läuft nur beim Merge auf main) ---
-    - name: Terraform Apply
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      run: |
-        cd environments/test
-        terraform apply -auto-approve
+      - name: Terraform Init
+        run: |
+          cd environments/test
+          terraform init
+
+      # PLAN-SCHRITT (Nur im PR)
+      - name: Terraform Plan
+        if: github.event_name == 'pull_request'
+        id: plan
+        run: |
+          cd environments/test
+          terraform plan -no-color -out=tfplan > plan_output.txt
+        continue-on-error: true
+
+      - name: Post Plan to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('environments/test/plan_output.txt', 'utf8');
+            const output = `#### Terraform Plan Status: 📝
+            
+            \`\`\`terraform
+            ${plan}
+            \`\`\`
+            
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+      # APPLY-SCHRITT (Nur beim Merge auf main)
+      - name: Terraform Apply
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          cd environments/test
+          terraform apply -auto-approve
