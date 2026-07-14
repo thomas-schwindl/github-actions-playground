@@ -20,6 +20,11 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.7
+
     # --- CHECK 1: FORMATIERUNG (Hält den Code sauber) ---
     - name: Terraform Format Check
       run: terraform fmt -check -recursive
@@ -31,11 +36,6 @@ jobs:
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
       # Findet z.B. unverschlüsselte Buckets oder offene Ports und kommentiert direkt im PR.
-
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: 1.5.7
 
     - name: Terraform Init
       run: |
