@@ -1,4 +1,4 @@
-name: "Terraform GitOps Enterprise"
+name: "Terraform GitOps"
 
 on:
   pull_request:
