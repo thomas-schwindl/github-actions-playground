@@ -30,7 +30,7 @@ resource "local_file" "sensitive_data" {
   file_permission = "0777"
 }
 
-resource "local_file" "sensitive_data" {
+resource "local_file" "sensitive_data2" {
   filename        = "${path.module}/secret2.txt"
   content         = "Das ist ein simuliertes Passwort!"
   file_permission = "0777"
