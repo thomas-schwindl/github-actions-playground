@@ -41,7 +41,28 @@ jobs:
         uses: aquasecurity/tfsec-pr-commenter-action@v1.2.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+# NEUER JOB: Automatische Dokumentation
+  readme-docs:
+    name: "Docs: Auto-Generate README"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Wichtig, damit der Runner die README im Repo aktualisieren darf
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          # Holt den echten Branch-Verlauf, um Merge-Konflikte beim Push zu vermeiden
+          ref: ${{ github.head_ref }}
 
+      # Generiert die Terraform-Tabellen automatisch
+      - name: Render terraform-docs inside README
+        uses: terraform-docs/gh-actions@v1.3.0
+        with:
+          working-dir: environments/test
+          output-file: README.md
+          output-method: inject
+          git-push: "true" # Pusht die aktualisierte README direkt wieder in deinen Branch!
+          git-commit-message: "docs: auto-update terraform block in README.md [skip ci]"
   # 2. Validierung & Plan-Generierung
   plan:
     name: "Terraform: Plan"
