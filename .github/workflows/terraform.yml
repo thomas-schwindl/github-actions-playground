@@ -37,24 +37,25 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
       # Findet z.B. unverschlüsselte Buckets oder offene Ports und kommentiert direkt im PR.
 
+# --- 4. INITIALISIEREN & VALIDIEREN ---
+    # Wir machen jetzt direkt ein volles Init, damit sowohl Validate als auch Plan funktionieren.
     - name: Terraform Init
       run: |
         cd environments/test
-        terraform init -backend=false
-        # '-backend=false' erlaubt das Validieren völlig ohne echtes Backend/S3-Verbindung
+        terraform init
 
-    # --- CHECK 3: SYNTAX & LOGIK (Prüft Variablen & Provider) ---
     - name: Terraform Validate
       run: |
         cd environments/test
         terraform validate
 
-    # --- SCHRITT 4: PLAN (Läuft nur im PR) ---
+    # --- 5. SCHRITT: PLAN (Läuft nur im PR) ---
     - name: Terraform Plan
       if: github.event_name == 'pull_request'
       id: plan
       run: |
         cd environments/test
+        # tfplan wird generiert, damit wir eine sichere Ausführungsbasis haben
         terraform plan -no-color -out=tfplan > plan_output.txt
       continue-on-error: true
 
