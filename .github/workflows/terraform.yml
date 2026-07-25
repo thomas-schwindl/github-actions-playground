@@ -72,6 +72,33 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
+  terraform-test:
+    name: "Test: ${{ matrix.module }}"
+    runs-on: ubuntu-latest
+
+    strategy:
+      # stopt nicht sofort alle anderen Tests, wenn ein Modul fehlschlägt
+      fail-fast: false
+      
+      # HIER MODULE EINTRAGEN:
+      matrix:
+        module:
+          - "aws_naming"
+          - "naming_governance"
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Run Terraform Test
+        run: |
+          cd modules/${{ matrix.module }}
+          terraform init
+          terraform test
+
   # NEUER JOB: Automatische Dokumentation
   readme-docs:
     name: "Docs: Auto-Generate README"
